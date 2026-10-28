@@ -633,6 +633,14 @@ body.has-touch #touch-controls:not(.hidden) {
   touch-action: none;
   box-shadow: 0 0 12px rgba(34, 230, 255, 0.35);
 }
+.touch-pause-btn i {
+  width: 4px;
+  height: 14px;
+  margin: 0 2.5px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow: 0 0 6px rgba(34, 230, 255, 0.8);
+}
 @media (pointer: coarse), (hover: none) {
   .touch-pause-btn:not(.hidden) { display: flex; }
 }
