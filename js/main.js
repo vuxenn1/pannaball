@@ -67,7 +67,7 @@
   NB.applyLang();
   refreshPills();
 
-  // --- Menü kartları (dikey saha minyatürleri) ----------------------------
+  // --- Menü kartları (saha minyatürleri, ekran yönüne göre CSS döndürür) ----
   for (const card of document.querySelectorAll('.card')) {
     const n = NB.MODES[card.dataset.mode].size;
     const mini = card.querySelector('.mini');
@@ -80,8 +80,8 @@
         dot.className = 'dot ' + team;
         const x = cols[i];
         const y = team === 'orange' ? 0.5 + rows[i] : 0.5 - rows[i];
-        dot.style.left = (x * 100) + '%';
-        dot.style.top = (y * 100) + '%';
+        dot.style.setProperty('--x', x);
+        dot.style.setProperty('--y', y);
         mini.appendChild(dot);
       }
     }
@@ -159,7 +159,11 @@
 
     setScreen('play');
     const name = NB.t(myTeam === 'orange' ? 'teamOrange' : 'teamPurple');
-    const arrow = NB.t(myTeam === 'orange' ? 'attackUp' : 'attackDown');
+    // Ekran yataysa saha döner: turuncu sağa, mor sola hücum eder
+    const wide = window.innerWidth > window.innerHeight;
+    const arrow = NB.t(wide
+      ? (myTeam === 'orange' ? 'attackRight' : 'attackLeft')
+      : (myTeam === 'orange' ? 'attackUp' : 'attackDown'));
     showToast(myTeam, NB.t('yourTeam', { name, arrow }));
   }
 

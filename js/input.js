@@ -1,6 +1,7 @@
 // Pannaball: yerel oyuncu kontrolcüsü.
-// Masaüstü: WASD / Ok tuşları veya akıcı Fare Takibi (Mouse-follow), sol tık şut, Shift boost.
+// Masaüstü: WASD / Ok tuşları hareket, fare nişan, sol tık şut, Shift boost.
 // Mobil: Sanal sol joystick (360° hareket ve nişan), sağ şut butonu ve boost butonu.
+// Tuş ve joystick yönleri ekrana göredir; saha döndüğünde renderer dünya yönüne çevirir.
 
 NB.LocalController = class {
   constructor(canvas, renderer) {
@@ -8,7 +9,7 @@ NB.LocalController = class {
     this.renderer = renderer;
     this.keys = new Set();
     this.mouse = { x: 0, y: 0, has: false };
-    this.lastTarget = { x: 0, y: 0 };
+    this.lastTouch = -Infinity; // dokunmadan sonra tarayıcının taklit ettiği fare olaylarını yok saymak için
     this.kickQueued = false;
 
     // Mobil dokunmatik kontrollerin durumu
@@ -29,20 +30,17 @@ NB.LocalController = class {
     });
     window.addEventListener('blur', () => this.keys.clear());
 
-    // Fare hareketleri
+    // Fare hareketleri (dokunmadan hemen sonra gelen sahte fare olayları sayılmaz)
+    const realMouse = () => performance.now() - this.lastTouch > 800;
+    window.addEventListener('touchstart', () => { this.lastTouch = performance.now(); }, { passive: true, capture: true });
     canvas.addEventListener('mousemove', (e) => {
+      if (!realMouse()) return;
       this.mouse.x = e.clientX;
       this.mouse.y = e.clientY;
       this.mouse.has = true;
     });
-
-    // Fare canvas dışına çıkarsa son geçerli konum korunur (crash/NaN önlenir)
-    canvas.addEventListener('mouseleave', () => {
-      // has durumu korunur, son geçerli lastTarget pozisyonu kullanılır
-    });
-
     canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0) this.kickQueued = true;
+      if (e.button === 0 && realMouse()) this.kickQueued = true;
     });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -169,75 +167,38 @@ NB.LocalController = class {
     }
   }
 
-  getInput(player, world) {
-    // 1. Dokunmatik Joystick Hareketi (Mobil cihazlarda)
+  getInput(player) {
+    const r = this.renderer;
+
+    // 1. Dokunmatik joystick (mobil)
     const hasTouch = this.touchJoystick.active && (Math.hypot(this.touchJoystick.x, this.touchJoystick.y) > 0.04);
 
-    // 2. Klavye Tuşları (WASD ve Ok Tuşları)
+    // 2. Klavye (WASD ve ok tuşları)
     const keyX = (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0);
     const keyY = (this.down('KeyS', 'ArrowDown') ? 1 : 0) - (this.down('KeyW', 'ArrowUp') ? 1 : 0);
-    const hasKeys = keyX !== 0 || keyY !== 0;
 
-    let moveX = 0;
-    let moveY = 0;
-    let aim = player.aim;
-
+    let sx = 0, sy = 0; // ekran yönünde hareket
     if (hasTouch) {
-      moveX = this.touchJoystick.x;
-      moveY = this.touchJoystick.y;
-      const len = Math.hypot(moveX, moveY);
-      if (len > 1) { moveX /= len; moveY /= len; }
-      if (len > 0.08) aim = Math.atan2(moveY, moveX);
-    } else if (hasKeys) {
+      sx = this.touchJoystick.x;
+      sy = this.touchJoystick.y;
+      const len = Math.hypot(sx, sy);
+      if (len > 1) { sx /= len; sy /= len; }
+    } else if (keyX || keyY) {
       const len = Math.hypot(keyX, keyY);
-      moveX = keyX / len;
-      moveY = keyY / len;
-
-      // WASD basılıyken fare varsa fareye doğru nişan al, yoksa hareket yönüne nişan al
-      if (this.mouse.has) {
-        const m = this.renderer.screenToWorld(this.mouse.x, this.mouse.y);
-        if (Number.isFinite(m.x) && Number.isFinite(m.y)) {
-          aim = Math.atan2(m.y - player.y, m.x - player.x);
-        }
-      } else {
-        aim = Math.atan2(moveY, moveX);
-      }
-    } else {
-      // 3. Fare Takibi (Mouse-follow)
-      const f = world ? world.field : null;
-      const limitX = f ? f.w / 2 + f.outerMargin - player.r : 350;
-      const limitY = f ? f.h / 2 + f.outerMargin - player.r : 600;
-
-      // Farenin dünya koordinatlarını al ve geçerli mi doğrula
-      if (this.mouse.has) {
-        const m = this.renderer.screenToWorld(this.mouse.x, this.mouse.y);
-        if (Number.isFinite(m.x) && Number.isFinite(m.y)) {
-          this.lastTarget.x = Math.max(-limitX, Math.min(limitX, m.x));
-          this.lastTarget.y = Math.max(-limitY, Math.min(limitY, m.y));
-        }
-      }
-
-      const tx = Math.max(-limitX, Math.min(limitX, this.lastTarget.x));
-      const ty = Math.max(-limitY, Math.min(limitY, this.lastTarget.y));
-
-      // Mesafe vektörü: fareye yakınsa dur (ölü bölge), yaklaştıkça yavaşla, uzaktaysa tam hız
-      const dx = tx - player.x;
-      const dy = ty - player.y;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist > 2) {
-        aim = Math.atan2(dy, dx);
-      }
-
-      const deadzone = 6;     // ölü bölge (piksel)
-      const slowRadius = 65;   // yavaşlama eşiği (piksel)
-
-      if (dist > deadzone) {
-        const speed = Math.min(1, (dist - deadzone) / slowRadius);
-        moveX = (dx / dist) * speed;
-        moveY = (dy / dist) * speed;
-      }
+      sx = keyX / len;
+      sy = keyY / len;
     }
+    const mv = r.screenDirToWorld(sx, sy);
+
+    // Nişan: fare varsa fareye, yoksa (mobil) hareket yönüne
+    let aim = player.aim;
+    if (this.mouse.has && !hasTouch) {
+      const m = r.screenToWorld(this.mouse.x, this.mouse.y);
+      if (Number.isFinite(m.x) && Number.isFinite(m.y)) aim = Math.atan2(m.y - player.y, m.x - player.x);
+    } else if (Math.hypot(sx, sy) > 0.08) {
+      aim = Math.atan2(mv.y, mv.x);
+    }
+    const moveX = mv.x, moveY = mv.y;
 
     const sprint = this.down('ShiftLeft', 'ShiftRight') || this.touchSprint;
     const kick = this.kickQueued;

@@ -22,19 +22,41 @@ NB.Renderer = class {
     this.dpr = dpr;
   }
 
-  // Dikey sahayı ekrana sığdır (oranı koruyarak responsive ölçekleme)
+  // Saha dünyada hep dikeydir (turuncu yukarı hücum eder). Ekran yataysa çizimi
+  // 90 derece döndürürüz: dünyanın "yukarısı" ekranın sağı olur. Fizik ve botlar
+  // bundan habersizdir, sadece çizim ve kontroller döner.
   fit(f) {
     const W = window.innerWidth, H = window.innerHeight;
-    const viewW = f.w + 2 * f.outerMargin + 24;
-    const viewH = f.h + 2 * (f.outerMargin + f.goalDepth) + 24;
-    const availH = H - this.hudHeight - 40; // altta yardım yazısı için pay
-    this.scale = Math.min(W / viewW, availH / viewH);
+    this.rotated = W > H;
+    const touch = NB.isTouchUI();
+    const fieldW = f.w + 2 * f.outerMargin + 24;
+    const fieldH = f.h + 2 * (f.outerMargin + f.goalDepth) + 24;
+    const viewW = this.rotated ? fieldH : fieldW;
+    const viewH = this.rotated ? fieldW : fieldH;
+
+    // Dokunmatikte joystick ve butonlara yer bırak: dikeyde altta, yatayda iki yanda
+    // Alçak ekranda (yatay telefon) skor tabelası küçülür, boost barı alta iner (style.css)
+    const short = H <= 500;
+    const top = short ? 50 : this.hudHeight;
+    let side = 0, bottom = 40;
+    if (touch) {
+      if (this.rotated) { side = 150; bottom = short ? 34 : 12; } else { bottom = 150; }
+    }
+    const availW = W - 2 * side;
+    const availH = H - top - bottom;
+    this.scale = Math.min(availW / viewW, availH / viewH);
     this.ox = W / 2;
-    this.oy = this.hudHeight + availH / 2;
+    this.oy = top + availH / 2;
   }
 
   screenToWorld(sx, sy) {
-    return { x: (sx - this.ox) / this.scale, y: (sy - this.oy) / this.scale };
+    const x = (sx - this.ox) / this.scale, y = (sy - this.oy) / this.scale;
+    return this.rotated ? { x: y, y: -x } : { x, y };
+  }
+
+  // Ekrandaki bir yönü (WASD, joystick) dünyadaki yöne çevirir
+  screenDirToWorld(dx, dy) {
+    return this.rotated ? { x: dy, y: -dx } : { x: dx, y: dy };
   }
 
   draw(world, localId, alpha) {
@@ -49,10 +71,11 @@ NB.Renderer = class {
     const f = world.field;
     this.fit(f);
 
-    ctx.setTransform(
-      this.dpr * this.scale, 0, 0, this.dpr * this.scale,
-      this.dpr * this.ox, this.dpr * this.oy,
-    );
+    const k = this.dpr * this.scale;
+    if (this.rotated) ctx.setTransform(0, k, -k, 0, this.dpr * this.ox, this.dpr * this.oy);
+    else ctx.setTransform(k, 0, 0, k, this.dpr * this.ox, this.dpr * this.oy);
+    // Yazılar ve stamina halkası ekranda dik dursun diye
+    const view = { textRot: this.rotated ? -Math.PI / 2 : 0, ringStart: this.rotated ? Math.PI : -Math.PI / 2 };
 
     const hw = f.w / 2, hh = f.h / 2, gx = f.goalW / 2, gd = f.goalDepth;
     const m = f.outerMargin;
@@ -130,7 +153,7 @@ NB.Renderer = class {
       const x = lerp(p.px, p.x, alpha), y = lerp(p.py, p.y, alpha);
       const isLocal = p === local;
       const isMate = !isLocal && local && p.team === local.team;
-      drawPlayer(ctx, p, x, y, isLocal, isMate);
+      drawPlayer(ctx, p, x, y, isLocal, isMate, view);
     }
 
     // Top
@@ -148,6 +171,7 @@ NB.Renderer = class {
       const t = 1 - world.pauseTicks / NB.CONFIG.goalPauseTicks;
       const s = 1 + 0.15 * Math.sin(Math.min(1, t * 4) * Math.PI);
       ctx.save();
+      ctx.rotate(view.textRot);
       ctx.scale(s, s);
       ctx.font = '900 110px system-ui, "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
@@ -178,7 +202,7 @@ function drawGoal(ctx, lineY, dir, gx, gd, color) {
   ctx.restore();
 }
 
-function drawPlayer(ctx, p, x, y, isLocal, isMate) {
+function drawPlayer(ctx, p, x, y, isLocal, isMate, view) {
   const C = NB.COLORS;
   const fill = p.team === 'orange' ? C.orange : C.purple;
   const edge = p.team === 'orange' ? C.orangeDark : C.purpleDark;
@@ -234,18 +258,22 @@ function drawPlayer(ctx, p, x, y, isLocal, isMate) {
   ctx.font = '800 14px system-ui, "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(String(p.number), x, y + 1);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(view.textRot);
+  ctx.fillText(String(p.number), 0, 1);
+  ctx.restore();
 
-  // Stamina halkası: sende kalın ve parlak, botlarda tutarlı ve sabit opaklıkta.
-  // Botların stamina bar'ı stamina değişse bile her karede sabit konum ve opaklıkta görünür kalır.
+  // Stamina halkası: sende kalın ve parlak, takım arkadaşlarında ince ve sabit.
+  // Rakiplerde gösterilmez.
   if (isLocal) {
-    drawStaminaRing(ctx, p, x, y, { R: p.r + 6, width: 3, alpha: 1, glowBlur: 10, isBot: false });
-  } else {
-    drawStaminaRing(ctx, p, x, y, { R: p.r + 5, width: 2, alpha: 0.65, glowBlur: 0, isBot: true });
+    drawStaminaRing(ctx, p, x, y, view, { R: p.r + 6, width: 3, alpha: 1, glowBlur: 10, isBot: false });
+  } else if (isMate) {
+    drawStaminaRing(ctx, p, x, y, view, { R: p.r + 5, width: 2, alpha: 0.65, glowBlur: 0, isBot: true });
   }
 }
 
-function drawStaminaRing(ctx, p, x, y, { R, width, alpha, glowBlur, isBot = false }) {
+function drawStaminaRing(ctx, p, x, y, view, { R, width, alpha, glowBlur, isBot = false }) {
   const C = NB.COLORS;
   ctx.save();
   ctx.lineWidth = width;
@@ -268,7 +296,7 @@ function drawStaminaRing(ctx, p, x, y, { R, width, alpha, glowBlur, isBot = fals
     glow(ctx, col, glowBlur, () => {
       ctx.strokeStyle = col;
       ctx.beginPath();
-      ctx.arc(x, y, R, -Math.PI / 2, -Math.PI / 2 + val * Math.PI * 2);
+      ctx.arc(x, y, R, view.ringStart, view.ringStart + val * Math.PI * 2);
       ctx.stroke();
     });
   }
@@ -288,9 +316,15 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y, x + w, y, r);
+  ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
+
+// Dokunmatik ekran mı? (joystick ve butonlar gösterilsin mi)
+NB.isTouchUI = function () {
+  return document.body.classList.contains('has-touch') ||
+    window.matchMedia('(pointer: coarse), (hover: none)').matches;
+};
 
 function lerp(a, b, t) { return a + (b - a) * t; }
